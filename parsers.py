@@ -121,30 +121,64 @@ class KrakenWebsoketParser(BaseWebsoketParser):
 
 # HTTP SERVER TO COMMUNICATE WITH DJANGO APP
 
-async def run_http_server():
-    async def handle_get(request):
-        name = request.match_info.get('name', "Anonymous")
-        pair = request.query.get("pair", None)
-        source = request.query.get("source", None)
+class HttpServerController:
+
+    def _response(self, context):
+        return web.Response(text=json.dumps(context))
+
+    def success_response(self, result):
+        context = {"status": "success", "data": result}
+        return self._response(context)
+
+    def error_response(self, error_code):
+        context = {"status": "error", "error_code": error_code}
+        return self._response(context)
+
+    async def handle_get(self, request):
+        try:
+            pair = request.query["pair"].upper()
+        except (KeyError, TypeError):
+            pair = None
+
+        try:
+            source = request.query["source"].lower()
+        except (KeyError, TypeError):
+            source = None
 
         # gets requested data
-        if not pair and not source:
-            result = data
-        elif not source:
-            result = data[pair]
-        elif not pair:
+        if pair and source:
+            try:
+                return self.success_response(data[pair][source])
+            except KeyError:
+                return self.error_response("unknown pair name or source")
+
+        elif pair:
+            try:
+                return self.success_response(data[pair])
+            except KeyError:
+                return self.error_response("unknown pair name")
+
+        elif source:
+            if source not in (
+                BinanceWebsoketParser.exchange_market_name,
+                KrakenWebsoketParser.exchange_market_name
+            ):
+                return self.error_response("unknown source name")
+
             result = {}
             for pair_name, pair_data in data.items():
                 if source in pair_data:
                     result[pair_name] = pair_data[source]
+            return self.success_response(result)
+
         else:
-            result = data[pair][source]
+            return self.success_response(data)
 
-        return web.Response(text=json.dumps(result))
 
+async def run_http_server():
     port = 8080
     app = web.Application()
-    app.add_routes([web.get('/', handle_get)])
+    app.add_routes([web.get('/', HttpServerController().handle_get)])
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
