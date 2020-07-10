@@ -1,173 +1,159 @@
-import time
-import asyncio
-import pathlib
-import ssl
-import websockets
-import http.server
-import socketserver
-
+import abc
 import json
 import requests
-import random
+import ssl
+import asyncio
+import websockets
 
 from aiohttp import web
 from websockets.exceptions import ConnectionClosedError
 
-
 data = {}
 
 
-# UTILITES
+class BaseWebsoketParser:
+    exchange_market_name = None
+    url = None
 
-def assign_prices(data, pair, source, prices):
-	if pair in data:
-		data[pair][source] = prices
-	else:
-		data[pair] = {source: prices}
+    def get_ssl_context(self):
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
 
+        return ssl_context
 
-def save_binance_tickers(data, message):
-	price_types = ["c", "o", "h", "l"]
-	tickers_list = json.loads(message)
+    def get_unified_pair_name(self, pair):
+        return pair.replace("/", "")
 
-	for ticker_data in tickers_list:
-		pair = ticker_data["s"]
-		prices = {price_type: ticker_data[price_type] for price_type in price_types}
-		
-		assign_prices(data, pair, "binance", prices)
+    def save_price(self, data, pair, price):
+        if pair in data:
+            data[pair][self.exchange_market_name] = price
+        else:
+            data[pair] = {self.exchange_market_name: price}
 
+    @abc.abstractmethod
+    def on_message(self, message):
+        pass
 
-def get_unified_name(pair):
-	return pair.replace("/", "")		
+    async def subscribe(self, websocket):
+        pass
 
+    async def get_tickers(self, data):
+        try:
+            async with websockets.connect(self.url, ssl=self.get_ssl_context()) as websocket:
+                print(f"Started {self.exchange_market_name} websocket parser")
+                await self.subscribe(websocket)
 
-def save_kraken_ticker(data, ticker_data):
-	price_types = ["a", "c", "o", "h", "l"]
+                async for message in websocket:
+                    self.on_message(message)
 
-	def get_average_price(price_data):
-		return (float(price_data[0]) + float(price_data[1])) / 2
-
-	def get_first_price(price_data):
-		return float(price_data[0])
-
-	def get_price(ticker_data, price_type):
-		price_get_methods = {
-			"a": get_first_price, 
-			"c": get_first_price, 
-			"o": get_average_price, 
-			"h": get_average_price, 
-			"l": get_average_price
-		}
-		return price_get_methods[price_type](ticker_data[price_type])
-	
-	pair = get_unified_name(ticker_data[-1])
-	prices = {price_type: get_price(ticker_data[1], price_type) for price_type in price_types}
-		
-	assign_prices(data, pair, "kraken", prices)
+        except ConnectionClosedError:
+            print(f"ConnectionClosedError on {self.exchange_market_name} websocket")
+            await self.get_tickers(data)
 
 
-# runs only at the beginning
-def get_kraken_pairs_names():
-	r = requests.get("https://api.kraken.com/0/public/AssetPairs")
-	pairs_dict = json.loads(r.text)['result']
+class BinanceWebsoketParser(BaseWebsoketParser):
+    exchange_market_name = "binance"
+    url = "wss://stream.binance.com:9443/ws/!ticker@arr"
 
-	pairs_ws_names = ""
+    def get_ask_bid_average_price(self, ticker_data):
+        return (float(ticker_data["a"]) + float(ticker_data["b"])) / 2
 
-	for pair_name, pair_data in pairs_dict.items():
-		try:
-			pair_wsname = pair_data['wsname']
-			pairs_ws_names += f'"{pair_wsname}",'
-		except KeyError:
-			pass
+    def proccess_tickers_data(self, data, message):
+        tickers_list = json.loads(message)
 
-	if pairs_ws_names:
-		pairs_ws_names = pairs_ws_names[:-1]   # remove ',' symbol
-	return pairs_ws_names
+        for ticker_data in tickers_list:
+            pair = ticker_data["s"]
+            price = {"price": self.get_ask_bid_average_price(ticker_data)}
+            self.save_price(data, pair, price)
 
-
-# PAIRS PRICES PARSERS
-
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
+    def on_message(self, message):
+        # print(message)
+        self.proccess_tickers_data(data, message)
 
 
-async def get_binance_tickers(data):
-	url = "wss://stream.binance.com:9443/ws/!ticker@arr"
-	
-	try:
-		async with websockets.connect(url, ssl=ssl_context) as websocket:
-			print("Started websocket binance parser")
+class KrakenWebsoketParser(BaseWebsoketParser):
+    exchange_market_name = "kraken"
+    url = "wss://ws.kraken.com/"
 
-			async for message in websocket:
-				save_binance_tickers(data, message)
-	
-	except ConnectionClosedError:
-		print("ConnectionClosedError on Binance websocket")
-		await get_binance_tickers(data)
+    def get_ask_bid_average_price(self, ticker_data):
+        prices = ticker_data[1]
+        return (float(prices["a"][0]) + float(prices["b"][0])) / 2
 
+    def process_ticker_data(self, data, ticker_data):
+        pair = self.get_unified_pair_name(ticker_data[-1])
+        price = {"price": self.get_ask_bid_average_price(ticker_data)}
+        self.save_price(data, pair, price)
 
-async def get_kraken_tickers(data):
-	url = "wss://ws.kraken.com/"
-	pairs_names = get_kraken_pairs_names()
-	
-	try:
-		async with websockets.connect(url, ssl=ssl_context) as websocket:
-			print("Started websocket kraken parser")
+    def on_message(self, message):
+        # print(message)
+        ticker_data = json.loads(message)
+        if type(ticker_data) == list:
+            self.process_ticker_data(data, ticker_data)
 
-			await websocket.send('{"event":"subscribe", "subscription":{"name":"ticker"}, "pair":[' + pairs_names + ']}')
-			
-			async for message in websocket:
-				ticker_data = json.loads(message)
-				if type(ticker_data) == list:
-					save_kraken_ticker(data, ticker_data)
+    # runs only once
+    def get_pairs_names(self):
+        r = requests.get("https://api.kraken.com/0/public/AssetPairs")
+        pairs_dict = json.loads(r.text)['result']
 
-	except ConnectionClosedError:
-		print("ConnectionClosedError on Kraken websocket")
-		await get_kraken_tickers(data)
+        pairs_ws_names = ""
+
+        for pair_name, pair_data in pairs_dict.items():
+            try:
+                pair_wsname = pair_data['wsname']
+                pairs_ws_names += f'"{pair_wsname}",'
+            except KeyError:
+                pass
+
+        if pairs_ws_names:
+            pairs_ws_names = pairs_ws_names[:-1]  # removes ',' symbol
+        return pairs_ws_names
+
+    async def subscribe(self, websocket):
+        pairs_names = self.get_pairs_names()
+        await websocket.send('{"event":"subscribe", "subscription":{"name":"ticker"}, "pair":[' + pairs_names + ']}')
 
 
 # HTTP SERVER TO COMMUNICATE WITH DJANGO APP
 
 async def run_http_server():
+    async def handle_get(request):
+        pair = request.query.get("pair", None)
+        source = request.query.get("source", None)
 
-	async def handle_get(request):
-		name = request.match_info.get('name', "Anonymous")
-		pair = request.query.get("pair", None)
-		source = request.query.get("source", None)
+        # gets requested data
+        if not pair and not source:
+            result = data
+        elif not source:
+            result = data[pair]
+        elif not pair:
+            result = {}
+            for pair_name, pair_data in data.items():
+                if source in pair_data:
+                    result[pair_name] = pair_data[source]
+        else:
+            result = data[pair][source]
 
-		# gets requested data
-		if not pair and not source:
-			result = data
-		elif not source:
-			result = data[pair]
-		elif not pair:
-			result = {}
-			for pair_name, pair_data in data.items():
-				if source in pair_data:
-					result[pair_name] = pair_data[source]
-		else:
-			result = data[pair][source]
+        return web.Response(text=json.dumps(result))
 
-		return web.Response(text=json.dumps(result))
-
-	port = 8080
-	app = web.Application()
-	app.add_routes([web.get('/', handle_get)])
-	runner = web.AppRunner(app)
-	await runner.setup()
-	site = web.TCPSite(runner, '0.0.0.0', port)
-	await site.start()
-	print(f"Started http server on {port}")
+    port = 8080
+    app = web.Application()
+    app.add_routes([web.get('/', handle_get)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Started http server on {port}")
 
 
 # CONCURRENT RUNNING OF PROGRAM COMPONENTS
 
 asyncio.get_event_loop().run_until_complete(
-	asyncio.gather(   
-		get_binance_tickers(data),
-		get_kraken_tickers(data),
-		run_http_server(),
-	)
+    asyncio.gather(
+        BinanceWebsoketParser().get_tickers(data),
+        KrakenWebsoketParser().get_tickers(data),
+        run_http_server(),
+    )
 )
+
 
