@@ -135,17 +135,9 @@ class HttpServerController:
         return self._response(context)
 
     async def handle_get(self, request):
-        try:
-            pair = request.query["pair"].upper()
-        except (KeyError, TypeError):
-            pair = None
+        pair = request.query.get("pair", None).upper()
+        source = request.query.get("source", None).lower()
 
-        try:
-            source = request.query["source"].lower()
-        except (KeyError, TypeError):
-            source = None
-
-        # gets requested data
         if pair and source:
             try:
                 return self.success_response(data[pair][source])
