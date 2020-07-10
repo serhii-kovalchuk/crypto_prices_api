@@ -1,17 +1,18 @@
-import abc
 import json
 import requests
 import ssl
 import asyncio
 import websockets
 
+from abc import ABC, abstractmethod
 from aiohttp import web
 from websockets.exceptions import ConnectionClosedError
+
 
 data = {}
 
 
-class BaseWebsoketParser:
+class BaseWebsoketParser(ABC):
     exchange_market_name = None
     url = None
 
@@ -23,6 +24,10 @@ class BaseWebsoketParser:
         return ssl_context
 
     def get_unified_pair_name(self, pair):
+        names_aliases = (("BTC", "XBT"), ("DOGE", "XDG"))
+
+        for origin_name, alias_name in names_aliases:
+            pair = pair.replace(alias_name, origin_name)
         return pair.replace("/", "")
 
     def save_price(self, data, pair, price):
@@ -31,7 +36,7 @@ class BaseWebsoketParser:
         else:
             data[pair] = {self.exchange_market_name: price}
 
-    @abc.abstractmethod
+    @abstractmethod
     def on_message(self, message):
         pass
 
@@ -118,6 +123,7 @@ class KrakenWebsoketParser(BaseWebsoketParser):
 
 async def run_http_server():
     async def handle_get(request):
+        name = request.match_info.get('name', "Anonymous")
         pair = request.query.get("pair", None)
         source = request.query.get("source", None)
 
@@ -155,5 +161,4 @@ asyncio.get_event_loop().run_until_complete(
         run_http_server(),
     )
 )
-
 
