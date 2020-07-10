@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile_parser
     command: bash -c "python3 parsers.py"
     networks:
-      - network
+      - crypto_prices_api_network
     volumes:
       - ./logs/:/crypto_prices_api/logs/
 
@@ -18,12 +18,14 @@ services:
       dockerfile: Dockerfile_django
     command: bash -c "python3 manage.py runserver 0.0.0.0:8000"
     networks:
-      - network
+      - crypto_prices_api_network
     volumes:
       - ./logs/:/crypto_prices_api/logs/
     ports:
       - "8000:8000"
+    depends_on:
+      - parser
 
 networks:
-  network:
+  crypto_prices_api_network:
     external: true
