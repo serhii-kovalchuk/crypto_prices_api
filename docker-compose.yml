@@ -1,0 +1,29 @@
+version: '3.7'
+
+services:
+
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile_parser
+    command: bash -c "python3 parsers.py"
+    networks:
+      - network
+    volumes:
+      - ./logs/:/crypto_prices_api/logs/
+
+  django:
+    build:
+      context: .
+      dockerfile: Dockerfile_django
+    command: bash -c "python3 manage.py runserver 0.0.0.0:8000"
+    networks:
+      - network
+    volumes:
+      - ./logs/:/crypto_prices_api/logs/
+    ports:
+      - "8000:8000"
+
+networks:
+  network:
+    external: true

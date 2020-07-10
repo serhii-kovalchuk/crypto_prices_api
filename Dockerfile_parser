@@ -1,0 +1,7 @@
+FROM python:3.7
+
+RUN mkdir /crypto_prices_api
+WORKDIR /crypto_prices_api
+COPY requirements_parser.txt /crypto_prices_api/
+RUN pip install -r requirements_parser.txt
+COPY parsers.py /crypto_prices_api/
