@@ -135,22 +135,26 @@ class HttpServerController:
         return self._response(context)
 
     async def handle_get(self, request):
-        pair = request.query.get("pair", None).upper()
-        source = request.query.get("source", None).lower()
+        pair = request.query.get("pair", None)
+        source = request.query.get("source", None)
 
         if pair and source:
+            pair = pair.upper()
+            source = source.lower()
             try:
                 return self.success_response(data[pair][source])
             except KeyError:
                 return self.error_response("unknown pair name or source")
 
         elif pair:
+            pair = pair.upper()
             try:
                 return self.success_response(data[pair])
             except KeyError:
                 return self.error_response("unknown pair name")
 
         elif source:
+            source = source.lower()
             if source not in (
                 BinanceWebsoketParser.exchange_market_name,
                 KrakenWebsoketParser.exchange_market_name
