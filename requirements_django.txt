@@ -1,4 +1,4 @@
-Django==2.2.3
+Django==2.2.24
 requests==2.21.0
 aiohttp==3.6.2
 websockets==8.1
